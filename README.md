@@ -15,9 +15,16 @@ see also [0x444454/mandelbr8](https://github.com/0x444454/mandelbr8).
 
 ## Requirements
 
-An F18A-compatible VDP (F18A or [PICO9918](https://github.com/visrealm/pico9918)).
-The whole renderer runs on the VDP's GPU, so there is no fallback path - if no
-GPU is detected the program prints an error and stops.
+With an F18A-compatible VDP (F18A or
+[PICO9918](https://github.com/visrealm/pico9918)) the whole renderer runs on the
+VDP's GPU, in 128x192 with 16 colours.
+
+Without one, the TI-99/4A build falls back to rendering on the host CPU in
+Graphics II - 256x192, two colours per 8x1 run. It is far slower, but it is the
+same algorithm and the same controls.
+
+The other targets have no CPU core yet (see below) and still require an
+F18A-compatible VDP; they print a message and stop if none is found.
 
 The TI-99/4A build additionally needs the 32K RAM expansion (CVBasic's TI-99
 target always does).
@@ -109,12 +116,37 @@ reading those glyphs straight back out of VRAM, which is why no font data is
 duplicated in ROM. (DDT's original read the TI-99 console GROM font instead -
 that is not available on the other CVBasic targets.)
 
+### CPU fallback
+
+`src/cpu-core.bas` evaluates one point in host-CPU assembly; `src/cpu-render.bas`
+drives the same two-pass low-res/high-res structure as the GPU path and packs the
+result into Graphics II.
+
+The core has to be assembly, per CPU: the Q4.12 iteration needs the high word of
+a 16x16 product and CVBasic's `*` is 16->16 only, so a BASIC implementation
+would be roughly two orders of magnitude too slow. **Only the TMS9900 core
+exists so far** - `HAS_CPU_CORE` is 0 for every other target. The Z80 needs a
+shift-add 16x16->32 routine (it has no multiply instruction) called three times
+per iteration; the contract to implement is documented in `cpu-core.bas`.
+
+The assembly is inline rather than a linked module because xas99 only accepts
+labels in column 1 and CVBasic's `ASM` statement always indents its payload -
+so an `ASM` block cannot declare a label on the TI-99 at all. CVBasic labels
+*are* emitted in column 1, so every branch target is a CVBasic label and the
+assembly jumps to its mangled name. Note the mangling differs by target:
+`#mpCx` becomes `cvb__MPCX` under xas99 but `cvb_#MPCX` under gasm80.
+
+The CPU path has no benchmark readout: in Graphics II the bitmap owns the
+pattern table, so there is no glyph source left to draw text from.
+
 ## Layout
 
 ```
 src/mandelcvb.bas     host program: F18A setup, GPU control, UI, fat-pixel text
 src/vdp-utils.bas     shared VDP/F18A helpers, VDP detection, GPU wait/poll
 src/input.bas         shared keyboard/joystick navigation
+src/cpu-core.bas      host-CPU point evaluator (inline assembly, per CPU)
+src/cpu-render.bas    host-CPU Graphics II renderer
 src/gpu/*.a99         TMS9900 code that runs on the F18A GPU
 src/gen/gpu/          generated (gitignored) - see below
 ```

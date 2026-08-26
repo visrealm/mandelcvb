@@ -45,6 +45,10 @@ CONST CVBASIC_INCLUDE_FONT = 1
 include "vdp-utils.bas"
 include "input.bas"
 
+' Host-CPU fallback, used when no F18A-compatible VDP is present.
+include "cpu-core.bas"
+include "cpu-render.bas"
+
 ' Generated from src/gpu/*.a99 by the build. Included here (ahead of any use)
 ' because CVBasic is single-pass: the *_SIZE constants must already be defined.
 include "gen/gpu/gpu-loader.bin.bas"
@@ -136,7 +140,12 @@ main:
 
   ' What are we working with?
   GOSUB vdpDetect
+  renderIsGpu = isF18ACompatible
+#if HAS_CPU_CORE
+  IF isF18ACompatible = FALSE THEN GOTO cpuMain
+#else
   IF isF18ACompatible = FALSE THEN GOTO noF18A
+#endif
 
   ' Upload the GPU image while the display is still off-limits to the bitmap
   ' layer, so the staging bytes are never visible.
@@ -210,8 +219,9 @@ idleLoop:
 ' USER INPUT
 ' ------------------------------------------
 handleInput:
-  ' If a render is running, ask the GPU to abort.
-  GOSUB abortGpuJob
+  ' If a GPU render is running, ask it to abort. The CPU renderer polls input
+  ' itself and has already stopped by the time we get here.
+  IF renderIsGpu THEN GOSUB abortGpuJob
 
   IF NAV(NAV_OK) THEN GOTO inputFire
 
@@ -267,7 +277,35 @@ inputFire:
 
 inputDone:
   FOR uiFrame = 1 TO uiDelay : WAIT : NEXT uiFrame
-  GOTO startRender
+  IF renderIsGpu THEN GOTO startRender
+  GOTO cpuStartRender
+
+' ------------------------------------------
+' CPU RENDER / UI LOOP
+' ------------------------------------------
+' Same view state and input handling as the GPU path; only the renderer differs.
+' There is no benchmark readout here - Graphics II has no spare glyph source
+' once the bitmap owns the pattern table.
+cpuMain:
+  GOSUB cpuSetupGraphics2
+
+  #uiAx = -2 * 4096
+  #uiAy = 6000
+  #uiInc = #UI_INC_MAX
+  #uiMaxIter = 16
+  paramVisible = FALSE
+
+cpuStartRender:
+  cpuAbort = FALSE
+  GOSUB cpuRenderLowRes
+  IF cpuAbort THEN GOTO handleInput
+  GOSUB cpuRenderHiRes
+  IF cpuAbort THEN GOTO handleInput
+
+cpuIdleLoop:
+  GOSUB updateNavInput
+  IF NAV(NAV_ANY_DIR) = 0 THEN GOTO cpuIdleLoop
+  GOTO handleInput
 
 ' ------------------------------------------
 ' NO F18A
@@ -277,6 +315,7 @@ noF18A:
   VDP_REG(7) = $F6              ' white on dark red
   PRINT AT XY(4, 10), "F18A GPU REQUIRED"
   PRINT AT XY(4, 12), "(F18A OR PICO9918)"
+  PRINT AT XY(2, 15), "NO CPU CORE FOR THIS CPU"
   WHILE 1 : WAIT : WEND
 
 ' ==========================================
