@@ -21,16 +21,27 @@
 ' $0000-$17FF  bitmap / pattern table
 ' $1800-$1AFF  name table (0..255 repeated three times)
 ' $1B00-$1B7F  sprite attribute table (list terminator only)
+' $1B80-$1E7F  charset copy, ASCII 32..127               <- ours
 ' $2000-$37FF  colour table, one byte per 8x1 pixel run
-' $3800-$3DFF  low-res buffer, 32*24 words          <- ours
+' $3800-$3DFF  low-res buffer, 32*24 words               <- ours
+'
+' The low-res buffer sits on top of the sprite pattern table, which VR6 puts at
+' $3800 in this mode. That is safe only because the sprite attribute list below
+' is terminated on the first entry, so the VDP never fetches a sprite pattern.
 ' ------------------------------------------
 CONST #CPU_BITMAP               = $0000
 CONST #CPU_COLOR                = $2000
 CONST #CPU_LR_BUF               = $3800
 CONST #CPU_SPR_ATTR             = $1B00
+CONST #CPU_FONT                 = $1B80
+CONST #CPU_FONT_BYTES           = 768
 
 CONST CPU_TILE_COLS             = 32
 CONST CPU_TILE_ROWS             = 24
+
+' Text colours: white on black.
+CONST CPU_TEXT_FG               = 15
+CONST CPU_TEXT_BG               = 1
 
 ' Bytes from one 8x8 cell to the cell below it.
 CONST #CPU_CELL_ROW             = 256
@@ -259,6 +270,99 @@ cpuRenderHiRes: PROCEDURE
     #cpuTileCy = #cpuTileCy - #uiInc
   NEXT cpuTy
 END
+
+' =============================================================================
+' TEXT
+' =============================================================================
+' In Graphics II a character cell maps one-to-one onto a bitmap cell, so drawing
+' a glyph is eight byte copies plus eight colour bytes. The only difficulty is
+' the glyph source: MODE 1 clears the pattern table, taking CVBasic's charset at
+' $0100 with it. cpuCopyFont stashes what we need above the low-res buffer
+' first, so it has to run while the VDP is still in MODE 2.
+' -----------------------------------------------------------------------------
+
+' -----------------------------------------------------------------------------
+' Copy the whole MODE 2 charset - ASCII 32..127, 768 bytes - into the gap above
+' the sprite attribute table.
+' -----------------------------------------------------------------------------
+cpuCopyFont: PROCEDURE
+  #cpuSrc = #VDP_FONT
+  #cpuAddr = #CPU_FONT
+  WHILE #cpuAddr < #CPU_FONT + #CPU_FONT_BYTES
+    VPOKE #cpuAddr, VPEEK(#cpuSrc)
+    #cpuSrc = #cpuSrc + 1
+    #cpuAddr = #cpuAddr + 1
+  WEND
+END
+
+' -----------------------------------------------------------------------------
+' Draw cpuChar at cell (cpuX, cpuY) in cpuFg on cpuBg.
+' -----------------------------------------------------------------------------
+cpuPrintChar: PROCEDURE
+  #cpuSrc = #CPU_FONT +(cpuChar - VDP_FONT_FIRST_CHAR) * 8
+  #cpuAddr = cpuY * #CPU_CELL_ROW + cpuX * 8
+  cpuAttr = cpuFg * 16 + cpuBg
+  FOR cpuI = 0 TO 7
+    VPOKE #CPU_BITMAP + #cpuAddr + cpuI, VPEEK(#cpuSrc + cpuI)
+    VPOKE #CPU_COLOR + #cpuAddr + cpuI, cpuAttr
+  NEXT cpuI
+END
+
+' -----------------------------------------------------------------------------
+' Draw the null-terminated string at cpuMessages(cpuMsgIdx), origin
+' (cpuMsgX, cpuMsgY). Byte 13 starts a new line back at cpuMsgX.
+' -----------------------------------------------------------------------------
+cpuPrintMessage: PROCEDURE
+  cpuX = cpuMsgX
+  cpuY = cpuMsgY
+  WHILE 1
+    cpuChar = cpuMessages(cpuMsgIdx)
+    cpuMsgIdx = cpuMsgIdx + 1
+    IF cpuChar = 0 THEN EXIT WHILE
+    IF cpuChar = 13 THEN
+      cpuX = cpuMsgX
+      cpuY = cpuY + 1
+    ELSE
+      GOSUB cpuPrintChar
+      cpuX = cpuX + 1
+    END IF
+  WEND
+END
+
+' -----------------------------------------------------------------------------
+' Draw #cpuHexVal as four hex digits at (cpuX, cpuY), advancing cpuX.
+' -----------------------------------------------------------------------------
+cpuPrintHexWord: PROCEDURE
+  cpuHexByte = #cpuHexVal / 256
+  GOSUB cpuPrintHexByte
+  cpuHexByte = #cpuHexVal AND $FF
+  GOSUB cpuPrintHexByte
+END
+
+cpuPrintHexByte: PROCEDURE
+  cpuNib = cpuHexByte / 16
+  GOSUB cpuPrintHexNibble
+  cpuNib = cpuHexByte AND $0F
+  GOSUB cpuPrintHexNibble
+END
+
+cpuPrintHexNibble: PROCEDURE
+  IF cpuNib < 10 THEN
+    cpuChar = cpuNib + 48
+  ELSE
+    cpuChar = cpuNib + 55
+  END IF
+  GOSUB cpuPrintChar
+  cpuX = cpuX + 1
+END
+
+' Splash text. The GPU path has its own copy in mandelcvb.bas - the strings
+' differ, and so does the renderer that draws them.
+cpuMessages:
+  DATA BYTE "DDT's MANDELBROT", 13
+  DATA BYTE "TMS9918A", 13
+  DATA BYTE "CPU RENDERING", 13
+  DATA BYTE "PORT BY VISREALM", 0
 
 ' Signed byte offsets from a cell to its eight neighbours, in the low-res
 ' buffer: W, E, NW, N, NE, SW, S, SE. 16-bit because they are negative.

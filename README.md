@@ -136,8 +136,27 @@ so an `ASM` block cannot declare a label on the TI-99 at all. CVBasic labels
 assembly jumps to its mangled name. Note the mangling differs by target:
 `#mpCx` becomes `cvb__MPCX` under xas99 but `cvb_#MPCX` under gasm80.
 
-The CPU path has no benchmark readout: in Graphics II the bitmap owns the
-pattern table, so there is no glyph source left to draw text from.
+Text on the CPU path takes a different route to the same place. `MODE 1` clears
+the pattern table, taking CVBasic's character set at `$0100` with it, so the
+charset is copied to `$1B80` first, while the VDP is still in MODE 2. From
+there a glyph is eight byte copies plus eight colour bytes, since a character
+cell maps one-to-one onto a bitmap cell. That pays for both the title screen and
+the elapsed-frame count drawn top right when a render completes.
+
+Graphics II VRAM works out as:
+
+| Address | Contents |
+| --- | --- |
+| `$0000-$17FF` | bitmap |
+| `$1800-$1AFF` | name table |
+| `$1B00-$1B7F` | sprite attributes (list terminator only) |
+| `$1B80-$1E7F` | character set copy, ASCII 32..127 |
+| `$2000-$37FF` | colour table, one byte per 8x1 run |
+| `$3800-$3DFF` | low-res iteration counts, 32x24 words |
+
+The low-res buffer sits on top of the sprite pattern table, which VR6 puts at
+`$3800` in this mode. That is only safe because the sprite attribute list is
+terminated on its first entry, so the VDP never fetches a sprite pattern.
 
 ## Layout
 

@@ -284,10 +284,18 @@ inputDone:
 ' CPU RENDER / UI LOOP
 ' ------------------------------------------
 ' Same view state and input handling as the GPU path; only the renderer differs.
-' There is no benchmark readout here - Graphics II has no spare glyph source
-' once the bitmap owns the pattern table.
 cpuMain:
+  ' Stash the charset before MODE 1 clears the pattern table out from under it.
+  GOSUB cpuCopyFont
   GOSUB cpuSetupGraphics2
+
+  cpuFg = CPU_TEXT_FG
+  cpuBg = CPU_TEXT_BG
+  cpuMsgX = 0
+  cpuMsgY = 0
+  cpuMsgIdx = 0
+  GOSUB cpuPrintMessage
+  FOR uiFrame = 1 TO UI_SPLASH_DELAY : WAIT : NEXT uiFrame
 
   #uiAx = -2 * 4096
   #uiAy = 6000
@@ -296,11 +304,22 @@ cpuMain:
   paramVisible = FALSE
 
 cpuStartRender:
+  ' No clear is needed first: the low-res pass paints both nibbles of every
+  ' colour byte, which hides the splash whatever the bitmap under it holds.
   cpuAbort = FALSE
+  #cpuStartFrame = FRAME
   GOSUB cpuRenderLowRes
   IF cpuAbort THEN GOTO handleInput
   GOSUB cpuRenderHiRes
   IF cpuAbort THEN GOTO handleInput
+
+  ' Elapsed frames, top right.
+  #cpuHexVal = FRAME - #cpuStartFrame
+  cpuX = CPU_TILE_COLS - 4
+  cpuY = 0
+  cpuFg = CPU_TEXT_FG
+  cpuBg = CPU_TEXT_BG
+  GOSUB cpuPrintHexWord
 
 cpuIdleLoop:
   GOSUB updateNavInput
@@ -619,6 +638,7 @@ paletteF18A:
   DATA BYTE $0A, $30            ' f
 
 messages:
-  DATA BYTE "DDT'S MANDELBROT", 13
-  DATA BYTE "F18A CVBASIC", 13
-  DATA BYTE "GPU RENDERING", 0
+  DATA BYTE "DDT's MANDELBROT", 13
+  DATA BYTE "F18A DETECTED", 13
+  DATA BYTE "GPU RENDERING", 13
+  DATA BYTE "PORT BY VISREALM", 0
