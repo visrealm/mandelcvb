@@ -326,16 +326,19 @@ cpuIdleLoop:
   IF NAV(NAV_ANY_DIR) = 0 THEN GOTO cpuIdleLoop
   GOTO handleInput
 
+#if HAS_CPU_CORE
+#else
 ' ------------------------------------------
 ' NO F18A
 ' ------------------------------------------
-' This program is intentionally F18A-only. Make failure visible and stop.
+' Only reachable on a target with no host-CPU core. Make failure visible and stop.
 noF18A:
   VDP_REG(7) = $F6              ' white on dark red
   PRINT AT XY(4, 10), "F18A GPU REQUIRED"
   PRINT AT XY(4, 12), "(F18A OR PICO9918)"
   PRINT AT XY(2, 15), "NO CPU CORE FOR THIS CPU"
   WHILE 1 : WAIT : WEND
+#endif
 
 ' ==========================================
 ' F18A SETUP / GPU CONTROL

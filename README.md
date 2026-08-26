@@ -19,12 +19,9 @@ With an F18A-compatible VDP (F18A or
 [PICO9918](https://github.com/visrealm/pico9918)) the whole renderer runs on the
 VDP's GPU, in 128x192 with 16 colours.
 
-Without one, the TI-99/4A build falls back to rendering on the host CPU in
+Without one, every supported machine falls back to rendering on the host CPU in
 Graphics II - 256x192, two colours per 8x1 run. It is far slower, but it is the
 same algorithm and the same controls.
-
-The other targets have no CPU core yet (see below) and still require an
-F18A-compatible VDP; they print a message and stop if none is found.
 
 The TI-99/4A build additionally needs the 32K RAM expansion (CVBasic's TI-99
 target always does).
@@ -51,6 +48,10 @@ F18A-compatible VDP.
 | Fire + `D` | More iterations |
 
 Fire is the joystick button, `SPACE` or `ENTER`.
+
+On the TI-99/4A, hold **`CTRL`** for the chords. CVBasic's keyboard scan reports
+only one key at a time, but it reads CTRL separately and folds it into joystick
+1 as button 2 - so `CTRL`+`E` zooms in where `SPACE`+`E` cannot.
 
 After a full render the elapsed frame count is printed as four hex digits in
 the top-right corner. While a parameter is being changed, its value is shown as
@@ -124,10 +125,17 @@ result into Graphics II.
 
 The core has to be assembly, per CPU: the Q4.12 iteration needs the high word of
 a 16x16 product and CVBasic's `*` is 16->16 only, so a BASIC implementation
-would be roughly two orders of magnitude too slow. **Only the TMS9900 core
-exists so far** - `HAS_CPU_CORE` is 0 for every other target. The Z80 needs a
-shift-add 16x16->32 routine (it has no multiply instruction) called three times
-per iteration; the contract to implement is documented in `cpu-core.bas`.
+would be roughly two orders of magnitude too slow.
+
+The TMS9900 core is DDT's, and leans on `MPY`. The Z80 has no multiply, so its
+core carries a shift-add 16x16->32 routine, unrolled sixteen ways, called three
+times per iteration at roughly 770 T-states a go. The TMS9900 also has enough
+registers to hold the whole iteration; the Z80 does not, so its state lives in
+RAM between steps - which costs little next to the multiplies.
+
+`HAS_CPU_CORE` is now 1 everywhere, since every target this builds for is one
+CPU or the other. The seam stays for a future 6502 target, which would fall
+back to the "F18A required" stop rather than render garbage.
 
 The assembly is inline rather than a linked module because xas99 only accepts
 labels in column 1 and CVBasic's `ASM` statement always indents its payload -

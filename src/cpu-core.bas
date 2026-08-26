@@ -31,17 +31,32 @@
 ' CVBasic renames #mpCx to cvb__MPCX there, while gasm80 keeps cvb_#MPCX.
 ' ----------------------------------------------------------------------------
 
-#if TI994A
+' Every target this project builds for is a TMS9900 or a Z80, and there is a
+' core for both. The seam stays so that adding a 6502 target (Creativision, NES)
+' is a matter of writing one procedure rather than untangling the renderer.
 CONST HAS_CPU_CORE = 1
-#else
-CONST HAS_CPU_CORE = 0
-#endif
 
 ' Point being evaluated, all Q4.12 except the iteration counts.
 DIM #mpCx
 DIM #mpCy
 DIM #mpMaxIter
 DIM #mpRem
+
+#if TI994A
+#else
+' Z80 scratch. The TMS9900 keeps all of this in registers.
+DIM #mpCnt                      ' iterations remaining
+DIM #mpZx2                      ' stored z^2 real term, Q4.12
+DIM #mpZy2                      ' stored z^2 imaginary term, Q4.12
+DIM #mpAx                       ' |zx|, |zy|
+DIM #mpAy
+DIM #mpPHi                      ' zx^2 and zy^2, Q8.24
+DIM #mpPLo
+DIM #mpQHi
+DIM #mpQLo
+DIM #mpT0
+DIM mpSgn                       ' bit 7 set iff sign(zx) <> sign(zy)
+#endif
 
 ' -----------------------------------------------------------------------------
 ' Evaluate one Mandelbrot point.
@@ -144,22 +159,284 @@ mpDone:
 #else
 
   ' ---------------------------------------------------------------------------
-  ' Z80 (and 6502) core: NOT IMPLEMENTED YET.
+  ' Z80. No multiply instruction, so the three products per iteration go through
+  ' mpMul below - a shift-add 16x16->32, unrolled. There are nowhere near enough
+  ' registers to hold the state, so everything lives in RAM between steps; the
+  ' loads are cheap next to the ~770 T-states a multiply costs.
   '
-  ' The Z80 has no multiply instruction, so this needs a shift-add 16x16->32
-  ' routine (~640 T-states) called three times per iteration, plus the Q8.24
-  ' escape test and the two narrowing shifts - all out of RAM scratch, because
-  ' there are nowhere near enough registers to hold the state.
-  '
-  ' Until that exists, HAS_CPU_CORE stays 0 for these targets and they keep the
-  ' current behaviour: detect no F18A, print the requirement, stop.
-  '
-  ' The contract to implement is exactly the TMS9900 one above:
-  '   read  cvb_#MPCX, cvb_#MPCY, cvb_#MPMAXITER
-  '   write cvb_#MPREM = iterations remaining (0 = inside the set)
-  '   leave SP, IX, IY and the shadow registers alone - CVBasic returns from a
-  '   PROCEDURE with a plain RET, so the Z80 stack must be balanced on exit
+  ' Only SP matters for the return: CVBasic ends a PROCEDURE with a plain RET.
+  ' IX, IY and the shadow registers are left alone.
   ' ---------------------------------------------------------------------------
+  ASM        jp   cvb_MPSTART
+
+  ' HL = |HL|, preserving BC and DE.
+mpAbsHl:
+  ASM        bit  7,h
+  ASM        ret  z
+  ASM        xor  a
+  ASM        sub  l
+  ASM        ld   l,a
+  ASM        sbc  a,a                   ; A = -carry, i.e. the borrow out of L
+  ASM        sub  h
+  ASM        ld   h,a
+  ASM        ret
+
+  ' DE:HL = DE * BC, unsigned 16x16 -> 32.
+  '
+  ' DE starts as the multiplier and ends as the product's high word: each step
+  ' shifts DE:HL left as one 32-bit value, which drops the next multiplier bit
+  ' into carry and makes room at the bottom for the product. The two never
+  ' collide - after k steps the partial product needs at most bit 16+k-1 and the
+  ' multiplier remnant starts at bit 16+k.
+mpMul:
+  ASM        ld   hl,0
+  ASM        add  hl,hl                 ; bit 15
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        jr   nc,$+6
+  ASM        add  hl,bc
+  ASM        jr   nc,$+3
+  ASM        inc  de
+  ASM        ret
+
+mpStart:
+  ASM        ld   hl,(cvb_#MPMAXITER)
+  ASM        ld   (cvb_#MPCNT),hl
+  ASM        ld   a,h
+  ASM        or   l
+  ASM        jp   z,cvb_MPDONE
+  ASM        ld   hl,0
+  ASM        ld   (cvb_#MPZX2),hl
+  ASM        ld   (cvb_#MPZY2),hl
+
+mpIter:
+  ' zx = zx2 + cx. Keep its sign byte in B, then reduce HL to |zx|.
+  ASM        ld   hl,(cvb_#MPZX2)
+  ASM        ld   de,(cvb_#MPCX)
+  ASM        add  hl,de
+  ASM        ld   b,h
+  ASM        call cvb_MPABSHL
+  ASM        ld   (cvb_#MPAX),hl
+
+  ' zy = zy2 + cy. Bit 7 of the stored byte ends up set iff the signs differ.
+  ASM        ld   hl,(cvb_#MPZY2)
+  ASM        ld   de,(cvb_#MPCY)
+  ASM        add  hl,de
+  ASM        ld   a,h
+  ASM        xor  b
+  ASM        ld   (cvb_MPSGN),a
+  ASM        call cvb_MPABSHL
+  ASM        ld   (cvb_#MPAY),hl
+
+  ' Full unsigned squares, Q8.24. They must not be narrowed before the escape
+  ' test or values outside the radius-2 circle would wrap.
+  ASM        ld   de,(cvb_#MPAX)
+  ASM        ld   bc,(cvb_#MPAX)
+  ASM        call cvb_MPMUL
+  ASM        ld   (cvb_#MPPLO),hl
+  ASM        ld   (cvb_#MPPHI),de
+
+  ASM        ld   de,(cvb_#MPAY)
+  ASM        ld   bc,(cvb_#MPAY)
+  ASM        call cvb_MPMUL
+  ASM        ld   (cvb_#MPQLO),hl
+  ASM        ld   (cvb_#MPQHI),de
+
+  ' Escape test: zx^2 + zy^2 >= 4.0. In Q8.24 that is >04000000, so once the
+  ' low-word carry is in, only the high byte of the high word matters.
+  ASM        ld   de,(cvb_#MPPLO)
+  ASM        add  hl,de                 ; HL is still QLO
+  ASM        ld   hl,(cvb_#MPPHI)
+  ASM        ld   de,(cvb_#MPQHI)
+  ASM        adc  hl,de
+  ASM        ld   a,h
+  ASM        cp   4
+  ASM        jp   nc,cvb_MPDONE
+
+  ' Inside the circle each square is < 4 and narrows safely to Q4.12:
+  ' result = (HI << 4) | (LO >> 12), which is the top word after four shifts.
+  ASM        ld   hl,(cvb_#MPPLO)
+  ASM        ld   de,(cvb_#MPPHI)
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        ld   (cvb_#MPT0),de       ; zx^2, Q4.12
+  ASM        ld   hl,(cvb_#MPQLO)
+  ASM        ld   de,(cvb_#MPQHI)
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        ld   hl,(cvb_#MPT0)
+  ASM        or   a                     ; clear carry for the subtract
+  ASM        sbc  hl,de
+  ASM        ld   (cvb_#MPZX2),hl      ; next zx = zx^2 - zy^2
+
+  ' Imaginary part: 2*zx*zy. The magnitudes are still in RAM, so no second ABS.
+  ' Narrowing and the doubling fold into one five-place shift.
+  ASM        ld   de,(cvb_#MPAX)
+  ASM        ld   bc,(cvb_#MPAY)
+  ASM        call cvb_MPMUL
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        add  hl,hl
+  ASM        rl   e
+  ASM        rl   d
+  ASM        ld   a,(cvb_MPSGN)
+  ASM        ex   de,hl                 ; HL = |2*zx*zy|, Q4.12
+  ASM        and  128
+  ASM        jp   z,cvb_MPPOS
+  ASM        xor  a
+  ASM        sub  l
+  ASM        ld   l,a
+  ASM        sbc  a,a
+  ASM        sub  h
+  ASM        ld   h,a
+mpPos:
+  ASM        ld   (cvb_#MPZY2),hl
+
+  ASM        ld   hl,(cvb_#MPCNT)
+  ASM        dec  hl
+  ASM        ld   (cvb_#MPCNT),hl
+  ASM        ld   a,h
+  ASM        or   l
+  ASM        jp   nz,cvb_MPITER
+
+mpDone:
+  ASM        ld   hl,(cvb_#MPCNT)
+  ASM        ld   (cvb_#MPREM),hl
 
 #endif
 
