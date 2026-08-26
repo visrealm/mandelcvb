@@ -1,0 +1,56 @@
+Creative Commons Attribution 4.0 International (CC BY 4.0)
+==========================================================
+
+This work is a port of DDT's fixed-point Mandelbrot generator.
+
+  Original work: mandel99 / mandelF18A
+  Author:        DDT (0x444454)
+  Source:        https://github.com/0x444454/mandel99
+  See also:      https://github.com/0x444454/mandelbr8
+  Licence:       Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+  This port:     mandelCVB
+  Author:        Troy Schrapel (visrealm)
+  Source:        https://github.com/visrealm/mandelcvb
+  Licence:       Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+Changes made in this port
+-------------------------
+
+The original TI-99/4A TMS9900 assembly program has been ported to CVBasic, so
+it builds for every CVBasic target with an F18A-compatible VDP rather than the
+TI-99/4A alone. Specifically:
+
+  * The host CPU side (F18A setup, GPU image upload, render loop, user input,
+    text rendering) was reimplemented in CVBasic.
+  * The F18A GPU code was kept as TMS9900 assembly and is otherwise
+    unchanged; the shared VRAM addresses were relocated to suit the CVBasic
+    host, and the framebuffer base moved from >0000 to >1000.
+  * Text glyphs are read from CVBasic's character set in VRAM instead of the
+    TI-99 console GROM font, which is not available on other targets.
+  * Frame timing uses the CVBasic runtime's interrupt handler and frame
+    counter instead of a custom VBlank hook.
+
+Licence text
+------------
+
+You are free to share and adapt this material for any purpose, including
+commercially, provided you give appropriate credit, provide a link to the
+licence, and indicate if changes were made.
+
+  Human-readable summary: https://creativecommons.org/licenses/by/4.0/deed.en
+  Full legal code:        https://creativecommons.org/licenses/by/4.0/legalcode
+
+Exception: shared support code
+------------------------------
+
+The following files are not derived from the original work and are licensed
+under the MIT licence, copyright (c) 2026 Troy Schrapel:
+
+  src/vdp-utils.bas
+  src/input.bas
+  tools/*
+  CMakeLists.txt, project-config.cmake, visrealm_cvbasic.cmake,
+  ti99_link_helper.cmake
+
+  MIT licence: https://opensource.org/licenses/MIT

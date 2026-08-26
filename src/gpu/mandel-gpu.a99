@@ -1,0 +1,404 @@
+;
+; Project: mandelcvb
+;
+; DDT's fixed-point Mandelbrot generator for the F18A GPU.
+;
+; Ported from DDT's mandelF18A.asm (TI-99/4A, TMS9900):
+;   https://github.com/0x444454/mandel99
+; For other platforms see also:
+;   https://github.com/0x444454/mandelbr8
+;
+; The iteration core, colour mapping and tile-skip logic below are DDT's,
+; essentially unchanged - only the shared VRAM addresses were relocated to suit
+; the CVBasic host, and the framebuffer base moved from >0000 to >1000.
+;
+; Original work (c) DDT, licensed CC BY 4.0: https://github.com/0x444454/mandel99
+; This port (c) 2026 Troy Schrapel, licensed CC BY 4.0
+; https://creativecommons.org/licenses/by/4.0/deed.en
+;
+; https://github.com/visrealm/mandelcvb
+;
+; ----------------------------------------------------------------------------
+; F18A GPU MANDELBROT IMAGE - AORG >4000, copied into GPU-local RAM.
+;
+; All Mandel working state lives in GPU registers, GPU-local variables, the
+; shared job input block in VRAM, or the low-res iteration buffer in VRAM.
+; The host CPU is not involved in any Mandel calculation.
+;
+; CRITICAL ARCHITECTURE NOTE:
+; This code runs INSIDE the VDP as a "virtual GPU" program, not on the host
+; CPU.  VRAM reads/writes are fast local memory accesses here, not slow
+; external VDP port accesses.
+; ----------------------------------------------------------------------------
+
+; Shared VRAM layout.  Must match the constants in src/mandelcvb.bas.
+FP_FB_BASE      EQU >1000           ; 128x192, 4-bpp fat pixels, 64 bytes/line.
+GPU_LR_BUF      EQU >0400           ; 32*24 words = >0600 bytes, through >09FF.
+
+; Host <-> GPU control block in ordinary VRAM.
+GPU_ABORT_FLAG  EQU >0A00           ; WORD: 0=run, nonzero=abort current render.
+GPU_JOB         EQU >0A02           ; WORD: 0=32x24 LR, 1=128x192 HR refinement.
+GPU_AX          EQU >0A04           ; WORD: LR upper-left X (Q4.12, *4096).
+GPU_AY          EQU >0A06           ; WORD: LR upper-left Y (Q4.12, *4096).
+GPU_INC         EQU >0A08           ; WORD: LR X/Y increment (Q4.12).
+GPU_MAXITER     EQU >0A0A           ; WORD: Maximum iteration count.
+GPU_DONE        EQU >0A0C           ; WORD: 0 while running, nonzero when finished.
+                                    ; Cleared by the host as part of the control
+                                    ; block, set here at every exit. The host
+                                    ; polls this instead of status register 2,
+                                    ; which cannot be selected safely while the
+                                    ; console interrupt handler is acknowledging
+                                    ; VBlank through the same port.
+
+GPU_MAIN_PC     EQU >4000           ; Beginning of GPU-local code image.
+GPU_LOCAL_LIMIT EQU >4800           ; F18A private GRAM is 2K: >4000..>47FF.
+
+        AORG GPU_MAIN_PC
+
+gpu_main:
+        ; Snapshot shared inputs into GPU-local state.
+        ; Host/UI and GPU coordinates are all native Q4.12, so no launch-time
+        ; fixed-point conversion is required.
+        MOV  @GPU_AX,@g_ax
+        MOV  @GPU_AY,@g_ay
+        MOV  @GPU_INC,@g_inc
+        MOV  @GPU_MAXITER,@g_max_iter
+
+        MOV  @GPU_JOB,R0
+        JNE  gpu_high_pass
+        B    @gpu_low_pass
+
+
+; ------------------- GPU LOW-RES PASS: logical 32x24 -------------------
+; Every low-res point is stored as a word in the LR buffer and immediately
+; rendered as one 4x8 block of F18A fat pixels.
+gpu_low_pass:
+        LI   R12,GPU_LR_BUF          ; Iteration output pointer.
+        MOV  @g_ay,R14               ; Cur CY.
+        LI   R0,FP_FB_BASE
+        MOV  R0,@g_fbptr
+        LI   R0,24
+        MOV  R0,@g_rowcnt
+
+glr_row:
+        MOV  @g_ax,R13               ; Cur CX.
+        LI   R15,32
+
+glr_pixel:
+        MOV  R13,R4
+        MOV  R14,R5
+        BL   @gpu_calc_color         ; R9 = iters, R2 = color; R12..R15 preserved.
+        MOV  R9,*R12+
+
+        ; One color nibble -> >CCCC, i.e. four 4-bpp fat pixels in one word.
+        MOV  R2,R3
+        SLA  R3,4
+        SOC  R2,R3                   ; R3 low byte = >CC.
+        MOV  R3,R1
+        SWPB R1
+        SOC  R1,R3                   ; R3 = >CCCC.
+
+        ; Fill 4x8 destination block with eight word writes, one per scanline.
+        MOV  @g_fbptr,R0
+        LI   R1,8
+glr_fill:
+        MOV  R3,*R0
+        AI   R0,64
+        DEC  R1
+        JNE  glr_fill
+
+        INCT @g_fbptr                ; next 4-pixel LR cell = 2 framebuffer bytes.
+        A    @g_inc,R13
+
+        MOV  @GPU_ABORT_FLAG,R0
+        JEQ  glr_not_aborted
+        B    @gpu_done_exit
+glr_not_aborted:
+        DEC  R15
+        JNE  glr_pixel
+
+        ; g_fbptr is now at the next scanline; move down seven more lines.
+        LI   R0,448                  ; 7 * 64.
+        A    R0,@g_fbptr
+        S    @g_inc,R14
+        DEC  @g_rowcnt
+        JNE  glr_row
+
+        B    @gpu_done_exit
+
+
+; ------------------- GPU HIGH-RES PASS: 128x192 fat pixels -------------------
+; The low-res buffer is used for a neighbour-based tile skip optimization.
+; Non-skipped LR cells are refined as 4x8 independent fat pixels.
+gpu_high_pass:
+        ; HR X increment = LR inc / 4; HR Y increment = LR inc / 8.
+        MOV  @g_inc,R0
+        MOV  R0,R1
+        SRA  R1,2
+        MOV  R1,@g_hrincx
+        MOV  R0,R1
+        SRA  R1,3
+        MOV  R1,@g_hrincy
+
+        ; First HR tile is centered on LR(0,0): x starts LRinc/2 left,
+        ; y starts LRinc/2 above, matching the low-res grid.
+        MOV  @g_inc,R1
+        SRA  R1,1
+        MOV  @g_ax,R0
+        S    R1,R0
+        MOV  R0,@g_hx0
+        MOV  R0,@g_tilecx
+
+        MOV  @g_ay,R0
+        A    R1,R0
+        MOV  R0,@g_tilecy
+
+        CLR  @g_tilex
+        CLR  @g_tiley
+        LI   R0,GPU_LR_BUF
+        MOV  R0,@g_lrptr
+        LI   R0,FP_FB_BASE
+        MOV  R0,@g_tilefb
+
+ghr_tile:
+        ; Border tiles are always refined.
+        MOV  @g_tilex,R0
+        JEQ  ghr_render_tile
+        CI   R0,31
+        JEQ  ghr_render_tile
+        MOV  @g_tiley,R0
+        JEQ  ghr_render_tile
+        CI   R0,23
+        JEQ  ghr_render_tile
+
+        ; Interior tile: skip only if all eight LR neighbors have same iters.
+        MOV  @g_lrptr,R1
+        MOV  *R1,R0
+        C    R0,@-2(R1)              ; W
+        JNE  ghr_render_tile
+        C    R0,@2(R1)               ; E
+        JNE  ghr_render_tile
+        C    R0,@-66(R1)             ; NW
+        JNE  ghr_render_tile
+        C    R0,@-64(R1)             ; N
+        JNE  ghr_render_tile
+        C    R0,@-62(R1)             ; NE
+        JNE  ghr_render_tile
+        C    R0,@66(R1)              ; SE
+        JNE  ghr_render_tile
+        C    R0,@64(R1)              ; S
+        JNE  ghr_render_tile
+        C    R0,@62(R1)              ; SW
+        JEQ  ghr_tile_done
+
+ghr_render_tile:
+        MOV  @g_tilefb,R12           ; framebuffer word address for first row.
+        MOV  @g_tilecy,R14
+        LI   R15,8
+
+ghr_row:
+        MOV  @g_tilecx,R13
+        CLR  @g_pack
+        LI   R0,4
+        MOV  R0,@g_pxcnt
+
+ghr_pixel:
+        MOV  R13,R4
+        MOV  R14,R5
+        BL   @gpu_calc_color
+
+        MOV  @GPU_ABORT_FLAG,R0
+        JEQ  ghr_not_aborted
+        B    @gpu_done_exit
+ghr_not_aborted:
+
+        MOV  @g_pack,R0
+        SLA  R0,4
+        SOC  R2,R0
+        MOV  R0,@g_pack
+        A    @g_hrincx,R13
+        DEC  @g_pxcnt
+        JNE  ghr_pixel
+
+        MOV  @g_pack,*R12
+        AI   R12,64
+        S    @g_hrincy,R14
+        DEC  R15
+        JNE  ghr_row
+
+ghr_tile_done:
+        INCT @g_lrptr
+        INCT @g_tilefb
+        INC  @g_tilex
+        MOV  @g_inc,R0
+        A    R0,@g_tilecx
+
+        MOV  @g_tilex,R0
+        CI   R0,32
+        JNE  ghr_tile
+
+        ; Next LR tile row.
+        CLR  @g_tilex
+        INC  @g_tiley
+        MOV  @g_hx0,@g_tilecx
+        MOV  @g_inc,R0
+        S    R0,@g_tilecy
+        LI   R0,448                  ; row base: +512 total, already +64 from 32 tiles.
+        A    R0,@g_tilefb
+
+        MOV  @g_tiley,R0
+        CI   R0,24
+        JNE  ghr_tile
+
+; Every exit publishes the completion flag before halting. The abort paths land
+; here too, so an aborted job still reports completion to the host.
+gpu_done_exit:
+        SETO @GPU_DONE
+        IDLE
+
+
+; ------------------- GPU MANDELBROT POINT + COLOR -------------------
+; This is the optimized Q4.12 iteration core from mandel99.
+; Keep both squares as full unsigned Q8.24 products until after the escape
+; test, so the radius check is exact at the available fixed-point precision.
+; The |zx|/|zy| magnitudes are then reused for the cross product, and the loop
+; counts remaining iterations down to zero to shorten the common tail.
+;
+; Inputs:
+;   R4 = cx (Q4.12).
+;   R5 = cy (Q4.12).
+; Uses: g_max_iter.
+; Outputs:
+;   R9 = iterations.
+;   R2 = Palette index [1..15].
+; Clobbered: R0..R11, preserves R12..R15.
+;
+gpu_calc_color:
+        MOV  R11,@g_calc_ret            ; Free R11 as a temporary inside loop.
+        CLR  R6                         ; stored z^2 real term (without c), Q4.12.
+        CLR  R7                         ; stored z^2 imaginary term (without c), Q4.12.
+        MOV  @g_max_iter,R9             ; iterations remaining.
+
+gcc_iter:
+        ; Reconstruct current z from the stored z^2 terms.
+        A    R4,R6                      ; zx += cx
+        A    R5,R7                      ; zy += cy
+
+        ; Save the cross-product sign, then retain magnitudes in R6/R7 so
+        ; they can be reused by the third MPY after the square test.
+        MOV  R6,R8
+        XOR  R7,R8                      ; bit15 set iff zx and zy signs differ.
+        ABS  R6
+        ABS  R7
+
+        ; Full Q8.24 squares.  Do not reduce them before the bailout test.
+        MOV  R6,R0
+        MPY  R6,R0                      ; R0:R1 = zx*zx
+        MOV  R7,R2
+        MPY  R7,R2                      ; R2:R3 = zy*zy
+
+        ; Exact fixed-point bailout: zx^2 + zy^2 >= 4.0.
+        ; 4.0 in Q8.24 is >04000000, so comparing the summed high word
+        ; against >0400 is sufficient after propagating the low-word carry.
+        MOV  R0,R11
+        MOV  R1,R10
+        A    R3,R10
+        JNC  gcc_no_sq_carry
+        INC  R11
+gcc_no_sq_carry:
+        A    R2,R11
+        CI   R11,>0400
+        JHE  gcc_done
+
+        ; Inside the radius-2 circle each square is <4 and can now be safely
+        ; converted Q8.24 -> Q4.12: (HI << 4) | (LO >> 12).
+        SLA  R0,4
+        SRL  R1,12
+        SOC  R1,R0                      ; R0 = zx^2, Q4.12
+
+        SLA  R2,4
+        SRL  R3,12
+        SOC  R3,R2                      ; R2 = zy^2, Q4.12
+
+        ; Save the next real part while the old |zx|/|zy| magnitudes are
+        ; still available for the cross product.
+        S    R2,R0
+        MOV  R0,R10                     ; next zx = zx^2 - zy^2
+
+        ; Q8.24 -> Q4.12 and *2 in one reduction: shift right 11.
+        MOV  R6,R0
+        MPY  R7,R0                      ; R0:R1 = |zx*zy|
+        SLA  R0,5
+        SRL  R1,11
+        SOC  R1,R0                      ; |2*zx*zy|, Q4.12
+        MOV  R0,R7
+        MOV  R10,R6
+
+        ; Duplicate the tiny loop tail so the usual positive-product path
+        ; does not pay for an unconditional branch every iteration.
+        MOV  R8,R8                      ; Re-establish flags from saved sign.
+        JLT  gcc_neg_xy
+        DEC  R9
+        JNE  gcc_iter
+        JMP  gcc_done
+gcc_neg_xy:
+        NEG  R7
+        DEC  R9
+        JNE  gcc_iter
+
+gcc_done:
+        ; Convert remaining-iteration count to completed iterations.
+        MOV  @g_max_iter,R10
+        S    R9,R10
+        MOV  R10,R9
+
+        ; max_iter maps to black (1).  The custom F18A palette itself is
+        ; already arranged as the desired gradient in entries 2..F, so
+        ; escaped values map directly to (iterations % 14) + 2.
+        C    R9,@g_max_iter
+        JNE  gcc_escaped
+        LI   R2,1
+        JMP  gcc_return
+
+gcc_escaped:
+        MOV  R9,R2
+        LI   R0,14
+        CLR  R1
+        DIV  R0,R1                     ; remainder -> R2 [0..13].
+        INCT R2                        ; palette index [2..15].
+
+gcc_return:
+        MOV  @g_calc_ret,R11
+        B    *R11
+
+
+; GPU-local Mandel working state. Coordinate values are Q4.12.
+g_ax:       DATA 0
+g_ay:       DATA 0
+g_inc:      DATA 0
+g_max_iter: DATA 0
+g_calc_ret: DATA 0              ; Saved BL return while R11 is a calc temporary.
+g_hrincx:   DATA 0
+g_hrincy:   DATA 0
+g_fbptr:    DATA 0
+g_rowcnt:   DATA 0
+g_hx0:      DATA 0
+g_tilecx:   DATA 0
+g_tilecy:   DATA 0
+g_tilex:    DATA 0
+g_tiley:    DATA 0
+g_lrptr:    DATA 0
+g_tilefb:   DATA 0
+g_pack:     DATA 0
+g_pxcnt:    DATA 0
+
+GPU_IMAGE_SIZE EQU $-GPU_MAIN_PC
+GPU_IMAGE_END  EQU GPU_MAIN_PC+GPU_IMAGE_SIZE
+
+; ERROR CHECK: The original F18A exposes 2K of private GPU GRAM at >4000..>47FF.
+;              Fail the build rather than silently overflowing.
+        .ifgt GPU_IMAGE_END,GPU_LOCAL_LIMIT
+        .error 'F18A GPU image exceeds [>4000..>47FF] private GRAM'
+        .endif
+
+        END

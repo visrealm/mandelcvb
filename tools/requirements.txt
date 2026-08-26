@@ -1,0 +1,6 @@
+# Python dependencies for the build tooling.
+#
+# bin2cvb.py and cvpletter.py use only the standard library, and XDT99's
+# xas99.py has no third-party dependencies either. This file exists so CI can
+# run a single unconditional `pip install -r tools/requirements.txt`, and as
+# the place to record a dependency if one of the tools ever grows one.

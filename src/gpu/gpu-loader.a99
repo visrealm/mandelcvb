@@ -1,0 +1,50 @@
+;
+; Project: mandelcvb
+;
+; DDT's fixed-point Mandelbrot generator for the F18A GPU.
+;
+; Ported from the gpu_loader_image bootstrap in DDT's mandelF18A.asm, with the
+; staging window and parameter block relocated for the CVBasic host.
+;
+; Original work (c) DDT, licensed CC BY 4.0: https://github.com/0x444454/mandel99
+; This port (c) 2026 Troy Schrapel, licensed CC BY 4.0
+; https://creativecommons.org/licenses/by/4.0/deed.en
+;
+; https://github.com/visrealm/mandelcvb
+;
+; ----------------------------------------------------------------------------
+; GPU BOOTSTRAP LOADER - executes from ordinary VRAM.
+;
+; The host CPU can only reach ordinary VRAM through the VDP port, so it cannot
+; write the main Mandelbrot image directly into GPU-local RAM (>4000..>47FF).
+; The host stages the image in VRAM, then starts this bootstrap on the GPU to
+; block-copy it across.
+;
+; Host-supplied parameters (written to VRAM before the GPU is started):
+;   >0AF0 WORD source VRAM address
+;   >0AF2 WORD destination GPU-local address
+;   >0AF4 WORD word count
+;
+; Completion is published to >0A0C, the same flag the main GPU image uses, so
+; the host never has to select a non-zero VDP status register to poll the GPU.
+; ----------------------------------------------------------------------------
+
+GPU_LDR_SRC     EQU  >0AF0
+GPU_LDR_DST     EQU  >0AF2
+GPU_LDR_WORDS   EQU  >0AF4
+GPU_DONE        EQU  >0A0C
+
+        AORG >0B00
+
+gpu_loader_entry:
+        MOV  @GPU_LDR_SRC,R0
+        MOV  @GPU_LDR_DST,R1
+        MOV  @GPU_LDR_WORDS,R2
+gpu_ldr_loop:
+        MOV  *R0+,*R1+
+        DEC  R2
+        JNE  gpu_ldr_loop
+        SETO @GPU_DONE
+        IDLE
+
+        END

@@ -1,0 +1,5 @@
+build/**
+src/gen/**
+src/*.pletter.bas
+src/*.bin.bas
+~$*
