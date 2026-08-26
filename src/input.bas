@@ -35,12 +35,28 @@ updateNavInput: PROCEDURE
   ' <UP> or <E>
   IF CONT.UP OR(CONT1.KEY = "E") THEN g_nav = g_nav OR NAV_UP
 
-  ' <RIGHT> or <D> or (<.> [>])
-  IF CONT.RIGHT OR(CONT1.KEY = "D") OR(CONT1.KEY = ".") THEN g_nav = g_nav OR NAV_RIGHT
+  ' <RIGHT> or <D>
+  IF CONT.RIGHT OR(CONT1.KEY = "D") THEN g_nav = g_nav OR NAV_RIGHT
 
-  ' <LEFT> or <S> or (<,> [<])
-  IF CONT.LEFT OR(CONT1.KEY = "S") OR(CONT1.KEY = ",") THEN g_nav = g_nav OR NAV_LEFT
+  ' <LEFT> or <S>
+  IF CONT.LEFT OR(CONT1.KEY = "S") THEN g_nav = g_nav OR NAV_LEFT
 
   ' <LBUTTON> or <SPACE> or <ENTER>
   IF CONT.BUTTON OR CONT.BUTTON2 OR(CONT1.KEY = " ") OR(CONT1.KEY = 11) THEN g_nav = g_nav OR NAV_OK
+
+  ' Single-key equivalents of the fire chords.
+  '
+  ' A keyboard cannot reach the chords on the TI-99: the matrix scan in
+  ' cvbasic_9900_prologue.asm returns the first pressed key it finds walking
+  ' columns 0 to 5, and every modifier - CTRL, SHIFT, FCTN - along with SPACE
+  ' sits in column 0. Holding one masks whatever else is down, so SPACE+E
+  ' reports SPACE and CTRL+E reports CTRL. Synthesising the chord from one key
+  ' costs nothing and leaves the joystick path untouched.
+  '
+  ' These are no-ops on a keypad-only machine: a ColecoVision returns 0-9, 10
+  ' and 11, never a letter.
+  IF CONT1.KEY = "I" THEN g_nav = g_nav OR NAV_OK OR NAV_UP        ' zoom in
+  IF CONT1.KEY = "O" THEN g_nav = g_nav OR NAV_OK OR NAV_DOWN      ' zoom out
+  IF CONT1.KEY = "," THEN g_nav = g_nav OR NAV_OK OR NAV_LEFT      ' <, fewer iterations
+  IF CONT1.KEY = "." THEN g_nav = g_nav OR NAV_OK OR NAV_RIGHT     ' >, more iterations
 END

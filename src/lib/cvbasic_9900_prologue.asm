@@ -926,8 +926,13 @@ int_handler
     socb r11,@joy2_data
 .noc2b2
 
-; key1 - this is a very simple read with no modifiers, it just gives access to the letters and numbers
+; key1 - gives access to the letters and numbers. A modifier or dead key is
+; remembered but does not end the scan, so CTRL+E reports 'E'. CTRL, FCTN,
+; SHIFT and SPACE all live in column 0, which is scanned first, so stopping at
+; the first key found would let a held modifier mask the whole keyboard.
+; r9, r10 and r14 are free here - int_handler runs on its own workspace.
     clr r11         ; column
+    li r10,>0f00    ; best key so far; >0f is Coleco-style "nothing pressed"
 !key1
     li r12,>0024    ; CRU base of select output
     ldcr r11,3      ; select column
@@ -939,12 +944,24 @@ int_handler
     sla r12,1
     czc @masktable(r12),r13    ; bit set?
     jne !key3       ; continue
-    srl r12,1
-    srl r11,5
-    a r12,r11       ; calculate table offset
-    movb @keyboard_table(r11),@key1_data    ; might be a dead key, but that's okay
+    mov r12,r9      ; work out the key without disturbing the scan state
+    srl r9,1        ; bit index
+    mov r11,r14
+    srl r14,5       ; column * 8
+    a r14,r9        ; calculate table offset
+    clr r14         ; movb only writes the high byte, so clear the low one
+    movb @keyboard_table(r9),r14
+    ci r14,>0f00    ; dead key or SHIFT - nothing to report either way
+    jeq !key3
+    ci r14,>fe00    ; FCTN
+    jeq !key6
+    ci r14,>ff00    ; CTRL
+    jeq !key6
+    mov r14,r10     ; a real key wins outright
     jmp !key4
 
+!key6
+    mov r14,r10     ; remember the modifier, but keep looking for a real key
 !key3
     srl r12,1
     dec r12
@@ -955,9 +972,8 @@ int_handler
     ci r11,>0600
     jne -!key1
     
-    li r11,>0f00
-    movb r11,@key1_data     ; no key was pressed
 !key4
+    movb r10,@key1_data
 
 ; check for quit - attempts to work it into the above were not working
 ; borrowed from console ROM

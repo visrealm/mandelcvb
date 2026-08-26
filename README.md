@@ -42,16 +42,19 @@ F18A-compatible VDP.
 | Input | Action |
 |---|---|
 | `E` `S` `D` `X` / joystick | Pan one low-res pixel |
-| Fire + `E` | Zoom in |
-| Fire + `X` | Zoom out |
-| Fire + `S` | Fewer iterations |
-| Fire + `D` | More iterations |
+| `I` / Fire + `E` | Zoom in |
+| `O` / Fire + `X` | Zoom out |
+| `,` / Fire + `S` | Fewer iterations |
+| `.` / Fire + `D` | More iterations |
 
-Fire is the joystick button, `SPACE` or `ENTER`.
+Fire is the joystick button, `SPACE`, `ENTER` or - on the TI-99/4A - `CTRL`.
 
-On the TI-99/4A, hold **`CTRL`** for the chords. CVBasic's keyboard scan reports
-only one key at a time, but it reads CTRL separately and folds it into joystick
-1 as button 2 - so `CTRL`+`E` zooms in where `SPACE`+`E` cannot.
+On the TI-99/4A the chords work with `CTRL` held, not `SPACE`: the keyboard
+scan reports one key at a time, and `SPACE` is a key in its own right, so
+`SPACE`+`E` reports the space. `CTRL` is read separately and folded in as
+button 2, so `CTRL`+`E` reports both. (This needs the keyboard scan patch
+described under Build; stock CVBasic stops the scan at `CTRL` and never sees
+the `E`.) `I` `O` `,` `.` need no modifier at all and work everywhere.
 
 After a full render the elapsed frame count is printed as four hex digits in
 the top-right corner. While a parameter is being changed, its value is shown as
@@ -212,19 +215,18 @@ The build fetches and builds [CVBasic](https://github.com/visrealm/CVBasic)
 > `CVBASIC_DIRECT_SPRITES` / `CVBASIC_INCLUDE_FONT` assembler symbols the
 > prologues test, which breaks the Z80 targets and silently omits the font.
 
-### CVBasic gotchas hit while writing this
+### Local change to the TI-99 runtime
 
-* **`CONST` without a `#` prefix is 8 bits and truncates silently.**
-  `CONST BIG = 628` compiles to 116 with no warning. This is why the GPU image
-  size comes from `VARPTR mandelGpuEnd(0) - VARPTR mandelGpu(0)` rather than
-  the `MANDEL_GPU_SIZE` constant `bin2cvb.py` emits - only 116 of 628 bytes
-  reached GPU GRAM, and the GPU hit an illegal opcode partway through
-  `gpu_calc_color`. A literal `628` in the same position is fine; it is only
-  the constant that is narrowed. Watch for this in `tools/bin2cvb.py` output
-  for any blob over 255 bytes.
-* **CVBasic is single-pass.** A `CONST` must be defined textually before the
-  line that reads it, which is why the generated GPU includes sit near the top
-  of `mandelcvb.bas` rather than at the bottom with the other data.
+`src/lib/cvbasic_9900_prologue.asm` carries one patch to CVBasic's keyboard
+scan. As shipped it walks matrix columns 0 to 5 and returns the first pressed
+key it finds - but CTRL, FCTN and SHIFT all sit in column 0, so holding one
+masks the entire keyboard and `CONT1.KEY` comes back as the modifier. The patch
+remembers a modifier instead of stopping on it and carries on looking for a
+real key, which makes `CTRL`+key readable.
+
+Every single keypress reports exactly what it did before, modifiers included;
+only modifier+key combinations change. It belongs upstream in the CVBasic fork
+rather than here - it is vendored only so this repo builds standalone.
 
 ## Credits and licence
 
