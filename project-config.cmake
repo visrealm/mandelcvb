@@ -2,7 +2,7 @@
 # Adjust these values to suit your game/demo.
 
 set(PROJECT_NAME mandelcvb)
-set(VERSION "v0-0-1")
+set(VERSION "v0-0-2")
 set(MAIN_SOURCE "mandelcvb.bas")
 set(CART_TITLE "MANDELCVB")
 
@@ -12,8 +12,8 @@ set(CART_TITLE "MANDELCVB")
 # List the platform targets you want built. Removing a target also skips
 # downloading/building its toolchain (e.g., TI-99 / XDT99) when possible.
 #
-# Note: every target needs an F18A-compatible VDP (F18A or PICO9918) - the
-# renderer runs entirely on the VDP's GPU.
+# Note: an F18A-compatible VDP (F18A or PICO9918) moves the whole renderer onto
+# the VDP's GPU. Without one the host CPU renders in Graphics II instead.
 set(ENABLED_TARGETS
     ti99
     coleco
