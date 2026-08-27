@@ -215,18 +215,36 @@ The build fetches and builds [CVBasic](https://github.com/visrealm/CVBasic)
 > `CVBASIC_DIRECT_SPRITES` / `CVBASIC_INCLUDE_FONT` assembler symbols the
 > prologues test, which breaks the Z80 targets and silently omits the font.
 
-### Local change to the TI-99 runtime
+### Local changes to the CVBasic runtime
 
-`src/lib/cvbasic_9900_prologue.asm` carries one patch to CVBasic's keyboard
-scan. As shipped it walks matrix columns 0 to 5 and returns the first pressed
-key it finds - but CTRL, FCTN and SHIFT all sit in column 0, so holding one
-masks the entire keyboard and `CONT1.KEY` comes back as the modifier. The patch
-remembers a modifier instead of stopping on it and carries on looking for a
-real key, which makes `CTRL`+key readable.
+Three patches, all of which belong upstream in the CVBasic fork rather than
+here - they are vendored only so this repo builds standalone.
 
-Every single keypress reports exactly what it did before, modifiers included;
-only modifier+key combinations change. It belongs upstream in the CVBasic fork
-rather than here - it is vendored only so this repo builds standalone.
+**`cvbasic_9900_prologue.asm` - TI-99 keyboard chords.** As shipped the scan
+walks matrix columns 0 to 5 and returns the first pressed key it finds, but
+CTRL, FCTN and SHIFT all sit in column 0, so holding one masks the entire
+keyboard and `CONT1.KEY` comes back as the modifier. The patch remembers a
+modifier instead of stopping on it and carries on looking for a real key, which
+makes `CTRL`+key readable. Every single keypress reports exactly what it did
+before, modifiers included; only modifier+key combinations change.
+
+**`cvbasic_prologue.asm` - missing font on BIOS-less machines.**
+`INCLUDE_FONT_DATA` was hardcoded to 0, so on any machine with no BIOS charset
+to point at, `mode_1` and `mode_2` copied 768 bytes from a stale `HL` into VRAM
+instead of the built-in `font_bitmaps`. It now matches the guard on
+`font_bitmaps` itself: `SG1000+SMS+SVI+SORD+MEMOTECH+EINSTEIN+PV2000+NABU`.
+This affected the NABU and SC-3000/SG-1000 builds.
+
+**`cvbasic_prologue.asm` - NABU keyboard reported no letters.** The handler
+mapped Enter, Del and the digits and discarded everything else, so `CONT1.KEY`
+could never see a letter or punctuation and none of the keyboard controls
+worked. Printable ASCII (`$20`..`$7e`) now passes straight through, as it does
+on the TI-99. One nearby `jr .1` became `jp .1` to stay in range.
+
+Note that on the NABU a keypress is visible for a single frame: the interrupt
+latches `nabu_data2` into `key1_data` and resets it. Controls are reliable at
+the idle prompt, which polls continuously, but a press aimed at interrupting a
+render in progress can fall between polls.
 
 ## Credits and licence
 

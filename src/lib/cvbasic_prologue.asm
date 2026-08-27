@@ -42,7 +42,9 @@
 	;
 
 
-INCLUDE_FONT_DATA: equ 0
+; Machines with no BIOS charset to point at. This must match the guard on
+; font_bitmaps below, or mode_1/mode_2 load the font from a stale HL.
+INCLUDE_FONT_DATA: equ SG1000+SMS+SVI+SORD+MEMOTECH+EINSTEIN+PV2000+NABU
 
 JOYSEL:	equ $c0
 KEYSEL:	equ $80
@@ -2705,8 +2707,16 @@ keyboard_handler:
 	jr nc,.7
 	sub $30
 .8:	ld (nabu_data2),a
-	jr .1
+	jp .1		; jp, not jr - .1 is out of relative range
 .7:
+; The NABU keyboard sends ASCII. Report printable characters as themselves,
+; the way the TI-99 target does - otherwise only digits, Enter and Del ever
+; reach key1_data and CONT1.KEY can never see a letter.
+	cp $20
+	jr c,.7a	; control code, nothing to report
+	cp $7f
+	jr c,.8		; $20..$7e - a printable key
+.7a:
 	cp $a0
 	jr c,.2
 	cp $c0
